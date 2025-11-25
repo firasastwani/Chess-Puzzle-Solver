@@ -1,9 +1,18 @@
 from datasets import load_dataset
 from stockfish import Stockfish
 import chess
+import chess.engine
 import chess.svg
 from pathlib import Path
 import time
+import sys
+from custom_eval import (
+    evaluate_position_fast,
+    evaluate_position_engine,
+    evaluate_king_attacks,
+    evaluate_piece_positions,
+    evaluate_king_saftey
+)
 
 def load_puzzle_board(fen_string):
     """
@@ -148,120 +157,6 @@ def filter_puzzles_by_mate_in_n(dataset, n):
     theme_to_find = f'mateIn{n}'
     return dataset.filter(lambda x: theme_to_find in x['Themes'])
 
-
-# custom evaluation function
-def evaluate_position(board):
-    """
-    Static evaluation function for minimax algo.
-    Returns a score from the perspective of the current player. 
-
-    Positive = good for white, Negative = good for black
-
-    Returns: 
-        int: Position score (in centipawns) 100 = 1 pawn advantage
-    """
-
-    # worst case for evaluated side (white)
-    if board.is_checkmate():
-        return -20000
-    
-    # neutral, game ends in a draw
-    if board.is_stalemate() or board.is_insufficient_material():
-        return 0
-
-    # give piece values to each piece
-    piece_values = {
-        chess.PAWN: 100, 
-        chess.KNIGHT: 300, 
-        chess.BISHOP: 300,
-        chess.ROOK: 500, 
-        chess.QUEEN: 900, 
-        chess.KING: 0 # handeled elsewhere
-    }
-    
-    score = 0
-
-    # calculate material counts
-    for piece_type in piece_values: 
-        white_pieces = len(board.pieces(piece_type, chess.WHITE))
-        black_pieces = len(board.pieces(piece_type, chess.BLACK))
-
-        score += (white_pieces - black_pieces) * piece_values[piece_type]
-    
-    # Add positional bonuses
-    score += evaluate_piece_positions(board)
-    
-    # Add king safety evaluation
-    score += evaluate_king_saftey(board)
-    
-    # Add mobility (number of legal moves is good)
-    score += len(list(board.legal_moves)) * 10
-    
-    # Return from white's perspective
-    return score if board.turn == chess.WHITE else -score
-
-
-def evaluate_piece_positions(board):
-    """
-    Apply bonus points for pieces in good positions (central positions are better)
-    """
-
-    pawn_table = [
-        0,  0,  0,  0,  0,  0,  0,  0,
-        50, 50, 50, 50, 50, 50, 50, 50,
-        10, 10, 20, 30, 30, 20, 10, 10,
-        5,  5, 10, 25, 25, 10,  5,  5,
-        0,  0,  0, 20, 20,  0,  0,  0,
-        5, -5,-10,  0,  0,-10, -5,  5,
-        5, 10, 10,-20,-20, 10, 10,  5,
-        0,  0,  0,  0,  0,  0,  0,  0
-    ]
-
-    knight_table = [
-        -50,-40,-30,-30,-30,-30,-40,-50,
-        -40,-20,  0,  0,  0,  0,-20,-40,
-        -30,  0, 10, 15, 15, 10,  0,-30,
-        -30,  5, 15, 20, 20, 15,  5,-30,
-        -30,  0, 15, 20, 20, 15,  0,-30,
-        -30,  5, 10, 15, 15, 10,  5,-30,
-        -40,-20,  0,  5,  5,  0,-20,-40,
-        -50,-40,-30,-30,-30,-30,-40,-50
-    ]
-
-    score = 0
-
-    # Evaluate white pawns
-    for square in board.pieces(chess.PAWN, chess.WHITE):
-        score += pawn_table[square]
-    
-    # Evaluate black pawns (flip table)
-    for square in board.pieces(chess.PAWN, chess.BLACK):
-        score -= pawn_table[63 - square]
-    
-    # Evaluate white knights
-    for square in board.pieces(chess.KNIGHT, chess.WHITE):
-        score += knight_table[square]
-    
-    # Evaluate black knights
-    for square in board.pieces(chess.KNIGHT, chess.BLACK):
-        score -= knight_table[63 - square]
-    
-    return score
-
-
-def evaluate_king_saftey(board):
-    """
-    Evaluate king saftey and adjust score
-    """
-
-    score = 0
-
-    if board.is_check():
-        score -= 50
-
-    return score
-
-
 def order_moves(board, moves):
     """
     Order moves to improve alpha-beta pruning efficiency.
@@ -282,12 +177,12 @@ def order_moves(board, moves):
         # Prioritize checks (most important for mate puzzles)
         board.push(move)
         if board.is_checkmate():
-            score += 100000  # Checkmate is best
+            score += 1000000  # Checkmate is best
         elif board.is_check():
-            score += 10000  # Checks are very good
+            score += 100000  # Checks are very good
         board.pop()
         
-        # Prioritize captures
+        # Prioritize captures HEAVILY (especially for hanging pieces!)
         if board.is_capture(move):
             # MVV-LVA: Most Valuable Victim - Least Valuable Attacker
             captured = board.piece_at(move.to_square)
@@ -300,7 +195,8 @@ def order_moves(board, moves):
                     chess.QUEEN: 900,
                     chess.KING: 0
                 }.get(captured.piece_type, 0)
-                score += victim_value
+                # Add huge bonus for captures (10000 + piece value)
+                score += 10000 + victim_value
         
         # Prioritize center moves
         to_rank = chess.square_rank(move.to_square)
@@ -316,36 +212,183 @@ def order_moves(board, moves):
     return [move for score, move in scored_moves]
 
 
-def minimax(board, depth, alpha, beta, maximizing):
+def quiescence_search_with_engine(board, alpha, beta, engine, max_depth=4):
+    """
+    Quiescence search using engine for evaluations.
+    Continues searching captures and checks to find forced mates.
+    
+    Args:
+        board: chess.Board position
+        alpha: alpha value
+        beta: beta value
+        engine: chess.engine.SimpleEngine instance
+        max_depth: maximum quiescence depth
+    
+    Returns:
+        int: evaluation score
+    """
+    global nodes_explored
+    nodes_explored += 1
+    
+    # Check for game over
+    if board.is_checkmate():
+        return -100000
+    if board.is_stalemate() or board.is_insufficient_material():
+        return 0
+    
+    # Stand-pat score using engine
+    # Use slightly higher depth in quiescence since we're in tactical sequences
+    stand_pat = evaluate_position_engine(board, engine, depth_limit=2, time_limit=0.02)
+    
+    if stand_pat >= beta:
+        return beta
+    if alpha < stand_pat:
+        alpha = stand_pat
+    
+    if max_depth <= 0:
+        return stand_pat
+    
+    # If in check, must search ALL moves
+    if board.is_check():
+        for move in order_moves(board, board.legal_moves):
+            board.push(move)
+            score = -quiescence_search_with_engine(board, -beta, -alpha, engine, max_depth - 1)
+            board.pop()
+            
+            if score >= beta:
+                return beta
+            if score > alpha:
+                alpha = score
+    else:
+        # Only search captures and checks (forcing moves)
+        for move in order_moves(board, board.legal_moves):
+            if not (board.is_capture(move) or board.gives_check(move)):
+                continue
+                
+            board.push(move)
+            score = -quiescence_search_with_engine(board, -beta, -alpha, engine, max_depth - 1)
+            board.pop()
+            
+            if score >= beta:
+                return beta
+            if score > alpha:
+                alpha = score
+    
+    return alpha
+
+
+def quiescence_search(board, alpha, beta, max_depth=4):
+    """
+    Quiescence search - continue searching captures and checks after depth limit.
+    This helps find tactical sequences like forced mates.
+    Uses fast material evaluation (Stockfish is too slow!).
+    
+    Args:
+        board: chess.Board position
+        alpha: alpha value
+        beta: beta value
+        max_depth: maximum quiescence depth to prevent infinite search
+    
+    Returns:
+        int: evaluation score
+    """
+    global nodes_explored
+    nodes_explored += 1
+    
+    # Check for game over
+    if board.is_checkmate():
+        return -100000
+    if board.is_stalemate() or board.is_insufficient_material():
+        return 0
+    
+    # Stand-pat score (can we just stop here?)
+    stand_pat = evaluate_position_fast(board)
+    
+    if stand_pat >= beta:
+        return beta
+    if alpha < stand_pat:
+        alpha = stand_pat
+    
+    if max_depth <= 0:
+        return stand_pat
+    
+    # If in check, must search ALL moves (you can't ignore check!)
+    if board.is_check():
+        for move in order_moves(board, board.legal_moves):
+            board.push(move)
+            score = -quiescence_search(board, -beta, -alpha, max_depth - 1)
+            board.pop()
+            
+            if score >= beta:
+                return beta
+            if score > alpha:
+                alpha = score
+    else:
+        # Only search captures and checks (forcing moves) when not in check
+        for move in order_moves(board, board.legal_moves):
+            # Only tactical moves
+            if not (board.is_capture(move) or board.gives_check(move)):
+                continue
+                
+            board.push(move)
+            score = -quiescence_search(board, -beta, -alpha, max_depth - 1)
+            board.pop()
+            
+            if score >= beta:
+                return beta
+            if score > alpha:
+                alpha = score
+    
+    return alpha
+
+
+def minimax(board, depth, alpha, beta, maximizing, engine=None, ply_from_root=0, use_engine=False):
     """
     Minimax search with alpha-beta pruning and move ordering.
-
-    Args: 
+    Can use chess.engine for evaluation (faster than stockfish package).
+    
+    Args:
         board: chess.Board current position
         depth: remaining search depth
         alpha: best score for maximizing player
         beta: best score for minimizing player
         maximizing: boolean set to True if maximizing players turn
-
-    Returns: 
+        engine: chess.engine.SimpleEngine instance (optional)
+        ply_from_root: distance from root (for preferring faster mates)
+        use_engine: If True, use engine at depth 0; else use quiescence search
+    
+    Returns:
         tuple: (best_score, best_move)
     """
     global nodes_explored
     nodes_explored += 1
     
-    if depth == 0 or board.is_game_over():
-        return evaluate_position(board), None
+    if board.is_checkmate():
+        # Prefer checkmates closer to root (faster mates)
+        return -100000 + ply_from_root, None
+    
+    if board.is_stalemate() or board.is_insufficient_material():
+        return 0, None
+    
+    # At depth 0, use engine evaluation directly (as it was working at depth 4)
+    if depth == 0:
+        if use_engine and engine:
+            # Use chess.engine with very low depth for speed (this was working!)
+            return evaluate_position_engine(board, engine, depth_limit=1, time_limit=0.01), None
+        else:
+            # Use quiescence search to extend tactical sequences
+            return quiescence_search(board, alpha, beta, max_depth=5), None
     
     best_move = None
     
     # Order moves for better pruning
     ordered_moves = order_moves(board, board.legal_moves)
-
-    if maximizing:
+    
+    if maximizing: 
         max_eval = float('-inf')
         for move in ordered_moves:
             board.push(move)
-            eval_score, _ = minimax(board, depth - 1, alpha, beta, False)
+            eval_score, _ = minimax(board, depth - 1, alpha, beta, False, engine, ply_from_root + 1, use_engine)
             board.pop()
             
             if eval_score > max_eval:
@@ -361,7 +404,7 @@ def minimax(board, depth, alpha, beta, maximizing):
         min_eval = float('inf')
         for move in ordered_moves:
             board.push(move)
-            eval_score, _ = minimax(board, depth - 1, alpha, beta, True)
+            eval_score, _ = minimax(board, depth - 1, alpha, beta, True, engine, ply_from_root + 1, use_engine)
             board.pop()
             
             if eval_score < min_eval:
@@ -379,11 +422,50 @@ def minimax(board, depth, alpha, beta, maximizing):
 nodes_explored = 0
 
 
-def solve_puzzle(puzzle_data, depth=6):
+def solve_puzzle(puzzle_data, stockfish_path=None, depth=6, use_engine_eval=False):
     """
     Attempt to solve the chess puzzle using minimax.
+    
+    Args:
+        puzzle_data: Dictionary containing puzzle information
+        stockfish_path: Path to Stockfish binary (None for auto-detect)
+        depth: Search depth
+        use_engine_eval: If True, use chess.engine for evaluation at depth 0 (faster than stockfish package)
+    
+    Returns:
+        bool: True if puzzle was solved correctly
     """
     global nodes_explored
+    
+    # Create chess.engine instance if requested
+    engine = None
+    if use_engine_eval:
+        try:
+            # Try to find Stockfish binary
+            if stockfish_path is None:
+                # Try common paths
+                stockfish_paths = [
+                    "/opt/homebrew/bin/stockfish",
+                ]
+                for path in stockfish_paths:
+                    try:
+                        engine = chess.engine.SimpleEngine.popen_uci(path)
+                        print(f"Using chess.engine with Stockfish at: {path}")
+                        break
+                    except:
+                        continue
+                if engine is None:
+                    # Try auto-detect
+                    engine = chess.engine.SimpleEngine.popen_uci("stockfish")
+                    print("Using chess.engine with auto-detected Stockfish")
+            else:
+                engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
+                print(f"Using chess.engine with Stockfish at: {stockfish_path}")
+        except Exception as e:
+            print(f"Warning: Could not initialize chess.engine: {e}")
+            print("Falling back to material evaluation...")
+            use_engine_eval = False
+            engine = None
     
     board = load_puzzle_board(puzzle_data['FEN'])
     expected_moves = puzzle_data['Moves'].split()
@@ -399,7 +481,7 @@ def solve_puzzle(puzzle_data, depth=6):
         nodes_explored = 0
         start_time = time.time()
         
-        score, best_move = minimax(board, depth, float('-inf'), float('inf'), board.turn)
+        score, best_move = minimax(board, depth, float('-inf'), float('inf'), board.turn, engine, ply_from_root=0, use_engine=use_engine_eval)
         
         elapsed = time.time() - start_time
         total_nodes += nodes_explored
@@ -414,7 +496,6 @@ def solve_puzzle(puzzle_data, depth=6):
             print(f"Move {i+1}: Found {best_move.uci()}, expected {expected_move}")
             print(f"  Nodes: {nodes_explored:,} | Time: {elapsed:.2f}s")
             solved = False
-            break
         else:
             print(f"Move {i+1}: {best_move.uci()} (score: {score})")
             print(f"  Nodes: {nodes_explored:,} | Time: {elapsed:.2f}s | Nodes/sec: {nodes_explored/elapsed:,.0f}")
@@ -424,6 +505,13 @@ def solve_puzzle(puzzle_data, depth=6):
     if solved:
         print(f"\nTotal - Nodes: {total_nodes:,} | Time: {total_time:.2f}s")
     
+    # Clean up engine
+    if engine:
+        try:
+            engine.quit()
+        except:
+            pass
+    
     return solved
 
 
@@ -432,7 +520,15 @@ def solve_puzzle(puzzle_data, depth=6):
 
 # Example usage with your puzzle data:
 if __name__ == "__main__":
-    # Example puzzle data
+    # Simple test puzzle - Mate in 1
+    simple_puzzle = {
+        'PuzzleId': 'simple_test',
+        'FEN': '4k3/p1R5/5R2/4P3/2P5/4n1P1/4r2P/7K w - - 3 35',  
+        'Moves': 'f6h6 e2e1', 
+        'Themes': ['mate', 'mateIn1'],
+    }
+    
+    # Example puzzle data - Mate in 2 (harder)
     example_puzzle = {
         'PuzzleId': '000hf',
         'GameId': '71ygsFeE/black#38',
@@ -445,65 +541,58 @@ if __name__ == "__main__":
         'Themes': ['mate', 'mateIn2', 'middlegame', 'short'],
         'OpeningTags': ['Horwitz_Defense', 'Horwitz_Defense_Other_variations']
     }
-    
-    # Load the board from FEN
-    board = load_puzzle_board(example_puzzle['FEN'])
-    print("Initial board position:")
-    print(board)
-    print("\nFEN:", board.fen())
-    print("\nIt's", "White's" if board.turn == chess.WHITE else "Black's", "turn")
-    print(f"\nPuzzle Themes: {example_puzzle['Themes']}")
-    
-    # Apply the puzzle solution moves
-    print("\n" + "="*50)
-    print("Applying puzzle solution moves:")
-    print("="*50)
-    
-    boards = apply_puzzle_moves(board.copy(), example_puzzle['Moves'])
-    move_list = example_puzzle['Moves'].split()
-    
-    for i, (move_uci, b) in enumerate(zip(move_list, boards[1:]), 1):
-        print(f"\nMove {i}: {move_uci}")
-        print(b)
-        if b.is_checkmate():
-            print("CHECKMATE!")
-
-    # Render the puzzle as SVG files
-    print("\n" + "="*50)
-    print("Rendering puzzle as SVG files:")
-    print("="*50)
-    rendered_files = render_puzzle_sequence(example_puzzle, output_dir="puzzle_renders")
-    print(f"\nGenerated {len(rendered_files)} SVG files:")
-    for filename in rendered_files:
-        print(f"  - {filename}")
-    
-    # You can also render individual positions
-    print("\n" + "="*50)
-    print("Rendering individual position:")
-    print("="*50)
-    final_board = boards[-1]
-    save_board_svg(
-        final_board, 
-        "checkmate_position.svg",
-        last_move=chess.Move.from_uci(move_list[-1]),
-        check_square=final_board.king(final_board.turn),
-        size=600
-    )
-    
     # Test the minimax solver
     print("\n" + "="*50)
     print("TESTING MINIMAX PUZZLE SOLVER")
     print("="*50)
-    print("\nThis mate-in-2 puzzle requires finding a forced checkmate.")
-    print("Testing different search depths...\n")
+    
+    # Try chess.engine evaluation (faster than stockfish package)
+    print("Testing with chess.engine evaluation (python-chess engine interface)")
+    print("This uses Stockfish via chess.engine with very low depth for speed")
+    
+    # Test 1: Simple puzzle
+    print("\n" + "="*50)
+    print("TEST 1: SIMPLE PUZZLE (Mate in 1)")
+    print("="*50)
+    simple_board = load_puzzle_board(simple_puzzle['FEN'])
+    print("Position:")
+    print(simple_board)
+    print()
+    
+    # Test with engine evaluation
+    # For mate-in-1, we need at least depth 2 (opponent move + our response)
+    # But we're using depth 5 to be safe
+    result = solve_puzzle(simple_puzzle, depth=4, use_engine_eval=True)
+    if result:
+        print("\n✓ SUCCESS! Simple puzzle solved correctly")
+    else:
+        print("\n✗ FAILED simple puzzle")
+        print("Trying without engine (material eval only)...")
+        result = solve_puzzle(simple_puzzle, depth=5, use_engine_eval=False)
+    
+    # Test 2: Harder puzzle
+    print("\n" + "="*50)
+    print("TEST 2: HARDER PUZZLE (Mate in 2)")
+    print("="*50)
+    print("This mate-in-2 puzzle requires finding a forced checkmate.")
+    print("Testing with chess.engine evaluation...\n")
     
     # Test with different depths
-    for depth in [4, 6]:
+    for depth in [3, 5]:
         print(f"\n{'='*50}")
         print(f"Testing with depth={depth}")
         print('='*50)
         
-        result = solve_puzzle(example_puzzle, depth=depth)
+        result = solve_puzzle(example_puzzle, depth=depth, use_engine_eval=True)
+        
+        if result:
+            print(f"\n✓ SUCCESS! Puzzle solved correctly at depth {depth}")
+        else:
+            print(f"\n✗ FAILED at depth {depth}")
+        
+        # Only try deeper if shallow failed
+        if result:
+            break
         
         if result:
             print(f"\n✓ SUCCESS! Puzzle solved correctly at depth {depth}")
@@ -523,3 +612,4 @@ if __name__ == "__main__":
     # # Filter for mate in 2 puzzles
     # mate_in_2 = filter_puzzles_by_mate_in_n(ds['train'], 2)
     # print(f"\nFound {len(mate_in_2)} mate in 2 puzzles")
+    
