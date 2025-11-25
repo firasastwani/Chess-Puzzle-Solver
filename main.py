@@ -3,6 +3,7 @@ from stockfish import Stockfish
 import chess
 import chess.svg
 from pathlib import Path
+import time
 
 def load_puzzle_board(fen_string):
     """
@@ -148,6 +149,287 @@ def filter_puzzles_by_mate_in_n(dataset, n):
     return dataset.filter(lambda x: theme_to_find in x['Themes'])
 
 
+# custom evaluation function
+def evaluate_position(board):
+    """
+    Static evaluation function for minimax algo.
+    Returns a score from the perspective of the current player. 
+
+    Positive = good for white, Negative = good for black
+
+    Returns: 
+        int: Position score (in centipawns) 100 = 1 pawn advantage
+    """
+
+    # worst case for evaluated side (white)
+    if board.is_checkmate():
+        return -20000
+    
+    # neutral, game ends in a draw
+    if board.is_stalemate() or board.is_insufficient_material():
+        return 0
+
+    # give piece values to each piece
+    piece_values = {
+        chess.PAWN: 100, 
+        chess.KNIGHT: 300, 
+        chess.BISHOP: 300,
+        chess.ROOK: 500, 
+        chess.QUEEN: 900, 
+        chess.KING: 0 # handeled elsewhere
+    }
+    
+    score = 0
+
+    # calculate material counts
+    for piece_type in piece_values: 
+        white_pieces = len(board.pieces(piece_type, chess.WHITE))
+        black_pieces = len(board.pieces(piece_type, chess.BLACK))
+
+        score += (white_pieces - black_pieces) * piece_values[piece_type]
+    
+    # Add positional bonuses
+    score += evaluate_piece_positions(board)
+    
+    # Add king safety evaluation
+    score += evaluate_king_saftey(board)
+    
+    # Add mobility (number of legal moves is good)
+    score += len(list(board.legal_moves)) * 10
+    
+    # Return from white's perspective
+    return score if board.turn == chess.WHITE else -score
+
+
+def evaluate_piece_positions(board):
+    """
+    Apply bonus points for pieces in good positions (central positions are better)
+    """
+
+    pawn_table = [
+        0,  0,  0,  0,  0,  0,  0,  0,
+        50, 50, 50, 50, 50, 50, 50, 50,
+        10, 10, 20, 30, 30, 20, 10, 10,
+        5,  5, 10, 25, 25, 10,  5,  5,
+        0,  0,  0, 20, 20,  0,  0,  0,
+        5, -5,-10,  0,  0,-10, -5,  5,
+        5, 10, 10,-20,-20, 10, 10,  5,
+        0,  0,  0,  0,  0,  0,  0,  0
+    ]
+
+    knight_table = [
+        -50,-40,-30,-30,-30,-30,-40,-50,
+        -40,-20,  0,  0,  0,  0,-20,-40,
+        -30,  0, 10, 15, 15, 10,  0,-30,
+        -30,  5, 15, 20, 20, 15,  5,-30,
+        -30,  0, 15, 20, 20, 15,  0,-30,
+        -30,  5, 10, 15, 15, 10,  5,-30,
+        -40,-20,  0,  5,  5,  0,-20,-40,
+        -50,-40,-30,-30,-30,-30,-40,-50
+    ]
+
+    score = 0
+
+    # Evaluate white pawns
+    for square in board.pieces(chess.PAWN, chess.WHITE):
+        score += pawn_table[square]
+    
+    # Evaluate black pawns (flip table)
+    for square in board.pieces(chess.PAWN, chess.BLACK):
+        score -= pawn_table[63 - square]
+    
+    # Evaluate white knights
+    for square in board.pieces(chess.KNIGHT, chess.WHITE):
+        score += knight_table[square]
+    
+    # Evaluate black knights
+    for square in board.pieces(chess.KNIGHT, chess.BLACK):
+        score -= knight_table[63 - square]
+    
+    return score
+
+
+def evaluate_king_saftey(board):
+    """
+    Evaluate king saftey and adjust score
+    """
+
+    score = 0
+
+    if board.is_check():
+        score -= 50
+
+    return score
+
+
+def order_moves(board, moves):
+    """
+    Order moves to improve alpha-beta pruning efficiency.
+    Priority: Checkmates > Checks > Captures > Other moves
+    
+    Args:
+        board: chess.Board position
+        moves: iterable of chess.Move objects
+    
+    Returns:
+        list of moves sorted by priority
+    """
+    scored_moves = []
+    
+    for move in moves:
+        score = 0
+        
+        # Prioritize checks (most important for mate puzzles)
+        board.push(move)
+        if board.is_checkmate():
+            score += 100000  # Checkmate is best
+        elif board.is_check():
+            score += 10000  # Checks are very good
+        board.pop()
+        
+        # Prioritize captures
+        if board.is_capture(move):
+            # MVV-LVA: Most Valuable Victim - Least Valuable Attacker
+            captured = board.piece_at(move.to_square)
+            if captured:
+                victim_value = {
+                    chess.PAWN: 100,
+                    chess.KNIGHT: 300,
+                    chess.BISHOP: 300,
+                    chess.ROOK: 500,
+                    chess.QUEEN: 900,
+                    chess.KING: 0
+                }.get(captured.piece_type, 0)
+                score += victim_value
+        
+        # Prioritize center moves
+        to_rank = chess.square_rank(move.to_square)
+        to_file = chess.square_file(move.to_square)
+        if 2 <= to_rank <= 5 and 2 <= to_file <= 5:
+            score += 10
+        
+        scored_moves.append((score, move))
+    
+    # Sort by score (highest first)
+    scored_moves.sort(key=lambda x: x[0], reverse=True)
+    
+    return [move for score, move in scored_moves]
+
+
+def minimax(board, depth, alpha, beta, maximizing):
+    """
+    Minimax search with alpha-beta pruning and move ordering.
+
+    Args: 
+        board: chess.Board current position
+        depth: remaining search depth
+        alpha: best score for maximizing player
+        beta: best score for minimizing player
+        maximizing: boolean set to True if maximizing players turn
+
+    Returns: 
+        tuple: (best_score, best_move)
+    """
+    global nodes_explored
+    nodes_explored += 1
+    
+    if depth == 0 or board.is_game_over():
+        return evaluate_position(board), None
+    
+    best_move = None
+    
+    # Order moves for better pruning
+    ordered_moves = order_moves(board, board.legal_moves)
+
+    if maximizing:
+        max_eval = float('-inf')
+        for move in ordered_moves:
+            board.push(move)
+            eval_score, _ = minimax(board, depth - 1, alpha, beta, False)
+            board.pop()
+            
+            if eval_score > max_eval:
+                max_eval = eval_score
+                best_move = move
+            
+            alpha = max(alpha, eval_score)
+            if beta <= alpha:
+                break  # Beta cutoff
+        
+        return max_eval, best_move
+    else:
+        min_eval = float('inf')
+        for move in ordered_moves:
+            board.push(move)
+            eval_score, _ = minimax(board, depth - 1, alpha, beta, True)
+            board.pop()
+            
+            if eval_score < min_eval:
+                min_eval = eval_score
+                best_move = move
+            
+            beta = min(beta, eval_score)
+            if beta <= alpha:
+                break  # Alpha cutoff
+        
+        return min_eval, best_move
+    
+
+# Global counter for nodes explored
+nodes_explored = 0
+
+
+def solve_puzzle(puzzle_data, depth=6):
+    """
+    Attempt to solve the chess puzzle using minimax.
+    """
+    global nodes_explored
+    
+    board = load_puzzle_board(puzzle_data['FEN'])
+    expected_moves = puzzle_data['Moves'].split()
+    
+    print(f"Solving puzzle {puzzle_data['PuzzleId']}")
+    print(f"Expected solution: {' '.join(expected_moves)}")
+    
+    solved = True
+    total_nodes = 0
+    total_time = 0
+    
+    for i, expected_move in enumerate(expected_moves):
+        nodes_explored = 0
+        start_time = time.time()
+        
+        score, best_move = minimax(board, depth, float('-inf'), float('inf'), board.turn)
+        
+        elapsed = time.time() - start_time
+        total_nodes += nodes_explored
+        total_time += elapsed
+        
+        if best_move is None:
+            print(f"Move {i+1}: No move found (depth too shallow or game over)")
+            solved = False
+            break
+        
+        if best_move.uci() != expected_move:
+            print(f"Move {i+1}: Found {best_move.uci()}, expected {expected_move}")
+            print(f"  Nodes: {nodes_explored:,} | Time: {elapsed:.2f}s")
+            solved = False
+            break
+        else:
+            print(f"Move {i+1}: {best_move.uci()} (score: {score})")
+            print(f"  Nodes: {nodes_explored:,} | Time: {elapsed:.2f}s | Nodes/sec: {nodes_explored/elapsed:,.0f}")
+        
+        board.push(best_move)
+    
+    if solved:
+        print(f"\nTotal - Nodes: {total_nodes:,} | Time: {total_time:.2f}s")
+    
+    return solved
+
+
+
+
+
 # Example usage with your puzzle data:
 if __name__ == "__main__":
     # Example puzzle data
@@ -208,6 +490,30 @@ if __name__ == "__main__":
         size=600
     )
     
+    # Test the minimax solver
+    print("\n" + "="*50)
+    print("TESTING MINIMAX PUZZLE SOLVER")
+    print("="*50)
+    print("\nThis mate-in-2 puzzle requires finding a forced checkmate.")
+    print("Testing different search depths...\n")
+    
+    # Test with different depths
+    for depth in [4, 6]:
+        print(f"\n{'='*50}")
+        print(f"Testing with depth={depth}")
+        print('='*50)
+        
+        result = solve_puzzle(example_puzzle, depth=depth)
+        
+        if result:
+            print(f"\n✓ SUCCESS! Puzzle solved correctly at depth {depth}")
+        else:
+            print(f"\n✗ FAILED at depth {depth}")
+        
+        # Only try deeper if shallow failed
+        if result:
+            break
+    
     # Uncomment to load and filter the full dataset:
     # print("\n" + "="*50)
     # print("Loading Lichess puzzles dataset...")
@@ -217,5 +523,3 @@ if __name__ == "__main__":
     # # Filter for mate in 2 puzzles
     # mate_in_2 = filter_puzzles_by_mate_in_n(ds['train'], 2)
     # print(f"\nFound {len(mate_in_2)} mate in 2 puzzles")
-
-    
