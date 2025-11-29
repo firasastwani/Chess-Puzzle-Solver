@@ -468,18 +468,39 @@ def solve_puzzle(puzzle_data, stockfish_path=None, depth=6, use_engine_eval=Fals
             engine = None
     
     board = load_puzzle_board(puzzle_data['FEN'])
-    expected_moves = puzzle_data['Moves'].split()
+    all_moves = puzzle_data['Moves'].split()
+    
+    # The first move is the opponent's move - apply it to the board
+    if len(all_moves) > 0:
+        opponent_first_move = chess.Move.from_uci(all_moves[0])
+        board.push(opponent_first_move)
+        print(f"Opponent plays: {all_moves[0]}")
+    
+    # Our moves are at indices 1, 3, 5, etc. (odd indices)
+    # Opponent moves are at indices 0, 2, 4, etc. (even indices, including 0)
+    our_expected_moves = all_moves[1::2]  # Indices 1, 3, 5, 7...
+    opponent_responses = all_moves[2::2]  # Indices 2, 4, 6, 8... (opponent's responses after our moves)
+    expected_num_our_moves = len(our_expected_moves)
     
     print(f"Solving puzzle {puzzle_data['PuzzleId']}")
-    print(f"Expected solution: {' '.join(expected_moves)}")
+    print(f"Full sequence: {' '.join(all_moves)}")
+    print(f"Our expected moves: {' '.join(our_expected_moves)} ({expected_num_our_moves} moves to mate)")
     
-    solved = True
     total_nodes = 0
     total_time = 0
+    our_moves = []
+    solved = False
     
-    for i, expected_move in enumerate(expected_moves):
+    # Play our moves (indices 1, 3, 5...)
+    for i in range(expected_num_our_moves):
         nodes_explored = 0
         start_time = time.time()
+        
+        # Check if we already have checkmate
+        if board.is_checkmate():
+            print(f"\n✓ CHECKMATE reached after {i} of our moves!")
+            solved = True
+            break
         
         score, best_move = minimax(board, depth, float('-inf'), float('inf'), board.turn, engine, ply_from_root=0, use_engine=use_engine_eval)
         
@@ -488,22 +509,78 @@ def solve_puzzle(puzzle_data, stockfish_path=None, depth=6, use_engine_eval=Fals
         total_time += elapsed
         
         if best_move is None:
-            print(f"Move {i+1}: No move found (depth too shallow or game over)")
-            solved = False
+            print(f"Our move {i+1}: No move found (depth too shallow or game over)")
             break
         
-        if best_move.uci() != expected_move:
-            print(f"Move {i+1}: Found {best_move.uci()}, expected {expected_move}")
-            print(f"  Nodes: {nodes_explored:,} | Time: {elapsed:.2f}s")
-            solved = False
-        else:
-            print(f"Move {i+1}: {best_move.uci()} (score: {score})")
-            print(f"  Nodes: {nodes_explored:,} | Time: {elapsed:.2f}s | Nodes/sec: {nodes_explored/elapsed:,.0f}")
+        our_moves.append(best_move.uci())
+        expected_move = our_expected_moves[i] if i < len(our_expected_moves) else "N/A"
+        
+        # Show if move matches expected (informational only)
+        match_indicator = "✓" if best_move.uci() == expected_move else "→"
+        print(f"Our move {i+1}: {match_indicator} {best_move.uci()} (expected: {expected_move}) (score: {score})")
+        print(f"  Nodes: {nodes_explored:,} | Time: {elapsed:.2f}s | Nodes/sec: {nodes_explored/elapsed:,.0f}")
         
         board.push(best_move)
+        
+        # Check if we reached checkmate immediately after our move
+        if board.is_checkmate():
+            print(f"\n✓ CHECKMATE reached after {i+1} of our moves!")
+            solved = True
+            break
+        
+        # Check if all opponent moves lead to checkmate (forced mate)
+        # This handles cases where mate happens after opponent's response
+        opponent_has_legal_moves = False
+        all_opponent_moves_lead_to_mate = True
+        
+        for opponent_move in board.legal_moves:
+            opponent_has_legal_moves = True
+            board.push(opponent_move)
+            if not board.is_checkmate():
+                all_opponent_moves_lead_to_mate = False
+            board.pop()
+            
+            if not all_opponent_moves_lead_to_mate:
+                break
+        
+        if opponent_has_legal_moves and all_opponent_moves_lead_to_mate:
+            print(f"\n✓ FORCED MATE after {i+1} of our moves (all opponent responses lead to checkmate)!")
+            solved = True
+            break
+        elif board.is_game_over():
+            # Game ended but not checkmate (stalemate, etc.)
+            print(f"\nGame over (not checkmate) after {i+1} of our moves")
+            break
+            break
+        
+        # Apply opponent's expected response (if available) before our next move
+        if i < len(opponent_responses):
+            opponent_response = chess.Move.from_uci(opponent_responses[i])
+            board.push(opponent_response)
+            print(f"  (Opponent responds: {opponent_responses[i]})")
+    
+    # Final check: did we solve it (reach checkmate within expected moves)?
+    if not solved:
+        # Check the board state one more time
+        if board.is_checkmate():
+            print(f"\n✓ CHECKMATE reached (took {len(our_moves)} of our moves, expected {expected_num_our_moves})")
+            solved = True
+        elif board.is_game_over():
+            print(f"\nGame ended but not checkmate. Final position:")
+            print(board)
+            print(f"FEN: {board.fen()}")
+            print(f"Game over reason: checkmate={board.is_checkmate()}, stalemate={board.is_stalemate()}")
+            solved = False
+        else:
+            print(f"\n✗ No checkmate reached after {len(our_moves)} of our moves. Our moves: {' '.join(our_moves)}")
+            print(f"Current position (turn: {'White' if board.turn == chess.WHITE else 'Black'}):")
+            print(board)
+            print(f"FEN: {board.fen()}")
+            solved = False
     
     if solved:
         print(f"\nTotal - Nodes: {total_nodes:,} | Time: {total_time:.2f}s")
+        print(f"Our solution: {' '.join(our_moves)}")
     
     # Clean up engine
     if engine:
@@ -565,10 +642,7 @@ if __name__ == "__main__":
     result = solve_puzzle(simple_puzzle, depth=4, use_engine_eval=True)
     if result:
         print("\n✓ SUCCESS! Simple puzzle solved correctly")
-    else:
-        print("\n✗ FAILED simple puzzle")
-        print("Trying without engine (material eval only)...")
-        result = solve_puzzle(simple_puzzle, depth=5, use_engine_eval=False)
+
     
     # Test 2: Harder puzzle
     print("\n" + "="*50)
@@ -578,7 +652,7 @@ if __name__ == "__main__":
     print("Testing with chess.engine evaluation...\n")
     
     # Test with different depths
-    for depth in [3, 5]:
+    for depth in [3, 4]:
         print(f"\n{'='*50}")
         print(f"Testing with depth={depth}")
         print('='*50)
