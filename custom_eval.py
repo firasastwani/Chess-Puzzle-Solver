@@ -130,7 +130,7 @@ def evaluate_position_fast(board):
     return score if board.turn == chess.WHITE else -score
 
 
-def evaluate_position_engine(board, engine, depth_limit=1, time_limit=0.01):
+def evaluate_position_engine(board, engine, depth_limit=4, time_limit=0.1):
     """
     Use chess.engine (python-chess) to evaluate positions.
     This is more direct than the stockfish package and can be faster.
@@ -138,8 +138,8 @@ def evaluate_position_engine(board, engine, depth_limit=1, time_limit=0.01):
     Args:
         board: chess.Board position
         engine: chess.engine.SimpleEngine instance
-        depth_limit: Maximum search depth (1 = very fast, just static eval)
-        time_limit: Maximum time in seconds (0.01 = 10ms)
+        depth_limit: Maximum search depth (4 = sufficient for tactical sequences)
+        time_limit: Maximum time in seconds (0.1 = 100ms)
     
     Returns:
         int: Position evaluation in centipawns (positive = white advantage)
@@ -157,6 +157,7 @@ def evaluate_position_engine(board, engine, depth_limit=1, time_limit=0.01):
             chess.engine.Limit(depth=depth_limit, time=time_limit)
         )
         
+        # Get score from the perspective of the side to move
         score = info["score"].relative.score(mate_score=100000)
         
         # Handle None (mate) or convert to int
@@ -168,8 +169,14 @@ def evaluate_position_engine(board, engine, depth_limit=1, time_limit=0.01):
             else:
                 score = 0
         
-        # score is from white's perspective
-        return int(score) if board.turn == chess.WHITE else -int(score)
+        # Convert to int and ensure score is always from White's perspective
+        # info["score"].relative is from the perspective of the side to move
+        score_int = int(score)
+        if board.turn == chess.BLACK:
+            # If it's Black's turn, flip the score to White's perspective
+            score_int = -score_int
+        
+        return score_int
     except Exception as e:
         # Fallback to fast material eval if engine fails
         return evaluate_position_fast(board)
