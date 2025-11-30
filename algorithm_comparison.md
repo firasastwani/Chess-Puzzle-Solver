@@ -19,6 +19,7 @@ I've implemented a **forward search** algorithm that:
 ## Key Differences
 
 ### Minimax (Original Approach)
+
 ```python
 # Assumes opponent will minimize our score
 if maximizing:
@@ -36,21 +37,22 @@ else:
 **Problem**: The opponent's move is chosen to minimize our score, but then we apply a predetermined move from the dataset instead!
 
 ### Forward Search (New Approach)
+
 ```python
 # Uses known opponent responses from puzzle
 for our_move in our_moves:
     board.push(our_move)
     if board.is_checkmate():
         return True  # Found solution!
-    
+
     # Apply known opponent response (not adversarial!)
     opponent_response = known_responses[move_index]
     board.push(opponent_response)
-    
+
     # Recursively search for next move
     if forward_search(board, move_index + 1):
         return True  # Found solution!
-    
+
     board.pop()  # Undo opponent move
     board.pop()  # Undo our move
 ```
@@ -60,11 +62,13 @@ for our_move in our_moves:
 ## When to Use Each
 
 ### Use Minimax When:
+
 - Playing against a real opponent (adversarial)
 - Building a chess engine for actual games
 - The opponent's moves are unknown and assumed optimal
 
 ### Use Forward Search When:
+
 - Solving chess puzzles (opponent moves are known)
 - Finding sequences in predetermined scenarios
 - The opponent's responses are fixed/known
@@ -72,6 +76,7 @@ for our_move in our_moves:
 ## Performance Implications
 
 Forward search should be:
+
 - **Faster**: Doesn't waste time evaluating opponent moves that won't happen
 - **More accurate**: Uses actual opponent responses instead of assuming optimal play
 - **Simpler**: No need for alpha-beta pruning on opponent moves (we know what they'll play)
@@ -89,4 +94,3 @@ test_puzzles(use_forward_search=True)
 ```
 
 Run the tests to compare performance and accuracy!
-

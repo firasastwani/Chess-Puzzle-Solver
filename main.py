@@ -250,218 +250,51 @@ def order_moves(board, moves, previous_move=None):
     return [move for score, move in scored_moves]
 
 
-def quiescence_search_with_engine(board, alpha, beta, engine, max_depth=4):
-    """
-    Quiescence search using engine for evaluations.
-    Continues searching captures and checks to find forced mates.
-    
-    Args:
-        board: chess.Board position
-        alpha: alpha value
-        beta: beta value
-        engine: chess.engine.SimpleEngine instance
-        max_depth: maximum quiescence depth
-    
-    Returns:
-        int: evaluation score
-    """
-    global nodes_explored
-    nodes_explored += 1
-    
-    # Check for game over
-    if board.is_checkmate():
-        return -100000
-    if board.is_stalemate() or board.is_insufficient_material():
-        return 0
-    
-    # Stand-pat score using engine
-    # Use slightly higher depth in quiescence since we're in tactical sequences
-    stand_pat = evaluate_position_engine(board, engine, depth_limit=2, time_limit=0.02)
-    
-    if stand_pat >= beta:
-        return beta
-    if alpha < stand_pat:
-        alpha = stand_pat
-    
-    if max_depth <= 0:
-        return stand_pat
-    
-    # If in check, must search ALL moves
-    if board.is_check():
-        for move in order_moves(board, board.legal_moves):
-            board.push(move)
-            score = -quiescence_search_with_engine(board, -beta, -alpha, engine, max_depth - 1)
-            board.pop()
-            
-            if score >= beta:
-                return beta
-            if score > alpha:
-                alpha = score
-    else:
-        # Only search captures and checks (forcing moves)
-        for move in order_moves(board, board.legal_moves):
-            if not (board.is_capture(move) or board.gives_check(move)):
-                continue
-                
-            board.push(move)
-            score = -quiescence_search_with_engine(board, -beta, -alpha, engine, max_depth - 1)
-            board.pop()
-            
-            if score >= beta:
-                return beta
-            if score > alpha:
-                alpha = score
-    
-    return alpha
-
-
-def quiescence_search(board, alpha, beta, max_depth=4):
-    """
-    Quiescence search - continue searching captures and checks after depth limit.
-    This helps find tactical sequences like forced mates.
-    Uses fast material evaluation (Stockfish is too slow!).
-    
-    Args:
-        board: chess.Board position
-        alpha: alpha value
-        beta: beta value
-        max_depth: maximum quiescence depth to prevent infinite search
-    
-    Returns:
-        int: evaluation score
-    """
-    global nodes_explored
-    nodes_explored += 1
-    
-    # Check for game over
-    if board.is_checkmate():
-        return -100000
-    if board.is_stalemate() or board.is_insufficient_material():
-        return 0
-    
-    # Stand-pat score (can we just stop here?)
-    stand_pat = evaluate_position_fast(board)
-    
-    if stand_pat >= beta:
-        return beta
-    if alpha < stand_pat:
-        alpha = stand_pat
-    
-    if max_depth <= 0:
-        return stand_pat
-    
-    # If in check, must search ALL moves (you can't ignore check!)
-    if board.is_check():
-        for move in order_moves(board, board.legal_moves):
-            board.push(move)
-            score = -quiescence_search(board, -beta, -alpha, max_depth - 1)
-            board.pop()
-            
-            if score >= beta:
-                return beta
-            if score > alpha:
-                alpha = score
-    else:
-        # Only search captures and checks (forcing moves) when not in check
-        for move in order_moves(board, board.legal_moves):
-            # Only tactical moves
-            if not (board.is_capture(move) or board.gives_check(move)):
-                continue
-                
-            board.push(move)
-            score = -quiescence_search(board, -beta, -alpha, max_depth - 1)
-            board.pop()
-            
-            if score >= beta:
-                return beta
-            if score > alpha:
-                alpha = score
-    
-    return alpha
-
-
-def minimax(board, depth, alpha, beta, maximizing, engine=None, ply_from_root=0, use_engine=False, previous_move=None):
-    """
-    Minimax search with alpha-beta pruning and move ordering.
-    Can use chess.engine for evaluation (faster than stockfish package).
-    
-    Args:
-        board: chess.Board current position
-        depth: remaining search depth
-        alpha: best score for maximizing player
-        beta: best score for minimizing player
-        maximizing: boolean set to True if maximizing players turn
-        engine: chess.engine.SimpleEngine instance (optional)
-        ply_from_root: distance from root (for preferring faster mates)
-        use_engine: If True, use engine at depth 0; else use quiescence search
-        previous_move: chess.Move from previous turn (for tactical continuity)
-    
-    Returns:
-        tuple: (best_score, best_move)
-    """
-    global nodes_explored
-    nodes_explored += 1
-    
-    if board.is_checkmate():
-        # Prefer checkmates closer to root (faster mates)
-        return -100000 + ply_from_root, None
-    
-    if board.is_stalemate() or board.is_insufficient_material():
-        return 0, None
-    
-    # At depth 0, use engine evaluation directly
-    if depth == 0:
-        if use_engine and engine:
-            # Use chess.engine with sufficient depth to see tactical sequences (mate-in-2 needs 4-5 plies)
-            return evaluate_position_engine(board, engine, depth_limit=4, time_limit=0.1), None
-        else:
-            # Use quiescence search to extend tactical sequences
-            return quiescence_search(board, alpha, beta, max_depth=5), None
-    
-    best_move = None
-    
-    # Order moves for better pruning, using previous_move for tactical continuity
-    ordered_moves = order_moves(board, board.legal_moves, previous_move=previous_move)
-    
-    if maximizing: 
-        max_eval = float('-inf')
-        for move in ordered_moves:
-            board.push(move)
-            eval_score, _ = minimax(board, depth - 1, alpha, beta, False, engine, ply_from_root + 1, use_engine, previous_move=move)
-            board.pop()
-            
-            if eval_score > max_eval:
-                max_eval = eval_score
-                best_move = move
-            
-            alpha = max(alpha, eval_score)
-            if beta <= alpha:
-                break  # Beta cutoff
-        
-        return max_eval, best_move
-    else:
-        min_eval = float('inf')
-        for move in ordered_moves:
-            board.push(move)
-            eval_score, _ = minimax(board, depth - 1, alpha, beta, True, engine, ply_from_root + 1, use_engine, previous_move=move)
-            board.pop()
-            
-            if eval_score < min_eval:
-                min_eval = eval_score
-                best_move = move
-            
-            beta = min(beta, eval_score)
-            if beta <= alpha:
-                break  # Alpha cutoff
-        
-        return min_eval, best_move
-    
-
 # Global counter for nodes explored
 nodes_explored = 0
 
 
-def solve_puzzle_forward_search(puzzle_data, max_depth=10, use_engine_eval=False, engine=None):
+def parse_puzzle_moves(puzzle_data):
+    """
+    Parse puzzle moves correctly.
+    
+    Puzzle format: The first move is the opponent's move (the blunder that creates the puzzle).
+    Then moves alternate: our move, opponent response, our move, opponent response, etc.
+    
+    Example: 'e8f7 e2e6 f7f8 e6f7'
+    - Index 0 (e8f7): Opponent's first move (applied to initial FEN)
+    - Index 1 (e2e6): Our first move (to find)
+    - Index 2 (f7f8): Opponent's response (from dataset)
+    - Index 3 (e6f7): Our second move (to find)
+    
+    Args:
+        puzzle_data: Dictionary containing puzzle information with 'FEN' and 'Moves' keys
+    
+    Returns:
+        tuple: (board_after_opponent_first_move, our_expected_moves, opponent_responses)
+            - board_after_opponent_first_move: chess.Board after opponent's first move
+            - our_expected_moves: List of UCI strings for our moves (indices 1, 3, 5, ...)
+            - opponent_responses: List of UCI strings for opponent responses (indices 2, 4, 6, ...)
+    """
+    board = load_puzzle_board(puzzle_data['FEN'])
+    all_moves = puzzle_data['Moves'].split()
+    
+    # The first move (index 0) is the opponent's move - apply it to the board
+    if len(all_moves) > 0:
+        opponent_first_move = chess.Move.from_uci(all_moves[0])
+        if opponent_first_move not in board.legal_moves:
+            raise ValueError(f"Opponent's first move {all_moves[0]} is not legal in position {puzzle_data['FEN']}")
+        board.push(opponent_first_move)
+    
+    # Our moves are at indices 1, 3, 5, etc. (odd indices after 0)
+    # Opponent responses are at indices 2, 4, 6, etc. (even indices after 0)
+    our_expected_moves = all_moves[1::2]  # Indices 1, 3, 5, 7...
+    opponent_responses = all_moves[2::2]  # Indices 2, 4, 6, 8...
+    
+    return board, our_expected_moves, opponent_responses
+
+
+def solve_puzzle(puzzle_data, stockfish_path=None, max_depth=10, use_engine_eval=False):
     """
     Solve puzzle using forward search with known opponent responses.
     This is more appropriate for puzzle solving where opponent moves are predetermined.
@@ -471,30 +304,44 @@ def solve_puzzle_forward_search(puzzle_data, max_depth=10, use_engine_eval=False
     
     Args:
         puzzle_data: Dictionary containing puzzle information
+        stockfish_path: Path to Stockfish binary (None for auto-detect)
         max_depth: Maximum search depth (number of our moves to search)
-        use_engine_eval: If True, use engine for position evaluation
-        engine: chess.engine.SimpleEngine instance (optional)
+        use_engine_eval: If True, use engine for position evaluation (currently not used in forward search)
     
     Returns:
-        tuple: (solved: bool, our_moves: list, nodes_explored: int)
+        bool: True if puzzle was solved correctly
     """
     global nodes_explored
     nodes_explored = 0
     
-    board = load_puzzle_board(puzzle_data['FEN'])
-    all_moves = puzzle_data['Moves'].split()
+    # Create engine if needed (though forward search doesn't use it much currently)
+    engine = None
+    if use_engine_eval:
+        try:
+            if stockfish_path is None:
+                stockfish_paths = ["/opt/homebrew/bin/stockfish"]
+                for path in stockfish_paths:
+                    try:
+                        engine = chess.engine.SimpleEngine.popen_uci(path)
+                        break
+                    except:
+                        continue
+                if engine is None:
+                    engine = chess.engine.SimpleEngine.popen_uci("stockfish")
+            else:
+                engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
+        except Exception as e:
+            print(f"Warning: Could not initialize chess.engine: {e}")
+            engine = None
     
-    # The first move is the opponent's move - apply it to the board
-    if len(all_moves) > 0:
-        opponent_first_move = chess.Move.from_uci(all_moves[0])
-        board.push(opponent_first_move)
-        print(f"Opponent plays: {all_moves[0]}")
-    
-    # Our moves are at indices 1, 3, 5, etc. (odd indices)
-    # Opponent moves are at indices 0, 2, 4, etc. (even indices, including 0)
-    our_expected_moves = all_moves[1::2]  # Indices 1, 3, 5, 7...
-    opponent_responses = all_moves[2::2]  # Indices 2, 4, 6, 8...
+    # Parse puzzle moves using the standard function
+    board, our_expected_moves, opponent_responses = parse_puzzle_moves(puzzle_data)
     expected_num_our_moves = len(our_expected_moves)
+    
+    # Get the opponent's first move for display
+    all_moves = puzzle_data['Moves'].split()
+    if len(all_moves) > 0:
+        print(f"Opponent plays: {all_moves[0]}")
     
     print(f"Solving puzzle {puzzle_data['PuzzleId']} using forward search")
     print(f"Full sequence: {' '.join(all_moves)}")
@@ -605,214 +452,12 @@ def solve_puzzle_forward_search(puzzle_data, max_depth=10, use_engine_eval=False
         else:
             print(f"  → Different from expected, but leads to checkmate")
         
-        return True, solution_moves, nodes_explored
+        solved = True
     else:
         print(f"\n✗ NO SOLUTION FOUND")
         print(f"  Nodes explored: {nodes_explored:,}")
         print(f"  Time: {elapsed:.2f}s")
-        return False, [], nodes_explored
-
-
-def solve_puzzle(puzzle_data, stockfish_path=None, depth=6, use_engine_eval=False, use_forward_search=False):
-    """
-    Attempt to solve the chess puzzle using minimax or forward search.
-    
-    Args:
-        puzzle_data: Dictionary containing puzzle information
-        stockfish_path: Path to Stockfish binary (None for auto-detect)
-        depth: Search depth (for minimax) or max depth (for forward search)
-        use_engine_eval: If True, use chess.engine for evaluation at depth 0 (faster than stockfish package)
-        use_forward_search: If True, use forward search instead of minimax (more appropriate for puzzles with known opponent responses)
-    
-    Returns:
-        bool: True if puzzle was solved correctly
-    """
-    global nodes_explored
-    
-    # Use forward search if requested (more appropriate for puzzle solving)
-    if use_forward_search:
-        # Create engine if needed (though forward search doesn't use it much)
-        engine = None
-        if use_engine_eval:
-            try:
-                if stockfish_path is None:
-                    stockfish_paths = ["/opt/homebrew/bin/stockfish"]
-                    for path in stockfish_paths:
-                        try:
-                            engine = chess.engine.SimpleEngine.popen_uci(path)
-                            break
-                        except:
-                            continue
-                    if engine is None:
-                        engine = chess.engine.SimpleEngine.popen_uci("stockfish")
-                else:
-                    engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
-            except Exception as e:
-                print(f"Warning: Could not initialize chess.engine: {e}")
-                engine = None
-        
-        solved, moves, nodes = solve_puzzle_forward_search(puzzle_data, max_depth=depth, 
-                                                          use_engine_eval=use_engine_eval, engine=engine)
-        
-        if engine:
-            try:
-                engine.quit()
-            except:
-                pass
-        
-        return solved
-    
-    # Otherwise use minimax (original implementation)
-    
-    # Create chess.engine instance if requested
-    engine = None
-    if use_engine_eval:
-        try:
-            # Try to find Stockfish binary
-            if stockfish_path is None:
-                # Try common paths
-                stockfish_paths = [
-                    "/opt/homebrew/bin/stockfish",
-                ]
-                for path in stockfish_paths:
-                    try:
-                        engine = chess.engine.SimpleEngine.popen_uci(path)
-                        print(f"Using chess.engine with Stockfish at: {path}")
-                        break
-                    except:
-                        continue
-                if engine is None:
-                    # Try auto-detect
-                    engine = chess.engine.SimpleEngine.popen_uci("stockfish")
-                    print("Using chess.engine with auto-detected Stockfish")
-            else:
-                engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
-                print(f"Using chess.engine with Stockfish at: {stockfish_path}")
-        except Exception as e:
-            print(f"Warning: Could not initialize chess.engine: {e}")
-            print("Falling back to material evaluation...")
-            use_engine_eval = False
-            engine = None
-    
-    board = load_puzzle_board(puzzle_data['FEN'])
-    all_moves = puzzle_data['Moves'].split()
-    
-    # The first move is the opponent's move - apply it to the board
-    if len(all_moves) > 0:
-        opponent_first_move = chess.Move.from_uci(all_moves[0])
-        board.push(opponent_first_move)
-        print(f"Opponent plays: {all_moves[0]}")
-    
-    # Our moves are at indices 1, 3, 5, etc. (odd indices)
-    # Opponent moves are at indices 0, 2, 4, etc. (even indices, including 0)
-    our_expected_moves = all_moves[1::2]  # Indices 1, 3, 5, 7...
-    opponent_responses = all_moves[2::2]  # Indices 2, 4, 6, 8... (opponent's responses after our moves)
-    expected_num_our_moves = len(our_expected_moves)
-    
-    print(f"Solving puzzle {puzzle_data['PuzzleId']}")
-    print(f"Full sequence: {' '.join(all_moves)}")
-    print(f"Our expected moves: {' '.join(our_expected_moves)} ({expected_num_our_moves} moves to mate)")
-    
-    total_nodes = 0
-    total_time = 0
-    our_moves = []
-    solved = False
-    previous_our_move = None  # Track our previous move for tactical continuity
-    
-    # Play our moves (indices 1, 3, 5...)
-    for i in range(expected_num_our_moves):
-        nodes_explored = 0
-        start_time = time.time()
-        
-        # Check if we already have checkmate
-        if board.is_checkmate():
-            print(f"\n✓ CHECKMATE reached after {i} of our moves!")
-            solved = True
-            break
-        
-        # Pass previous move to minimax for tactical continuity
-        score, best_move = minimax(board, depth, float('-inf'), float('inf'), board.turn, engine, ply_from_root=0, use_engine=use_engine_eval, previous_move=previous_our_move)
-        
-        elapsed = time.time() - start_time
-        total_nodes += nodes_explored
-        total_time += elapsed
-        
-        if best_move is None:
-            print(f"Our move {i+1}: No move found (depth too shallow or game over)")
-            break
-        
-        our_moves.append(best_move.uci())
-        expected_move = our_expected_moves[i] if i < len(our_expected_moves) else "N/A"
-        
-        # Show if move matches expected (informational only)
-        match_indicator = "✓" if best_move.uci() == expected_move else "→"
-        print(f"Our move {i+1}: {match_indicator} {best_move.uci()} (expected: {expected_move}) (score: {score})")
-        if previous_our_move:
-            print(f"  (Previous move: {previous_our_move.uci()}, continuing tactical sequence)")
-        print(f"  Nodes: {nodes_explored:,} | Time: {elapsed:.2f}s | Nodes/sec: {nodes_explored/elapsed:,.0f}")
-        
-        board.push(best_move)
-        previous_our_move = best_move  # Remember this move for next iteration
-        
-        # Check if we reached checkmate immediately after our move
-        if board.is_checkmate():
-            print(f"\n✓ CHECKMATE reached after {i+1} of our moves!")
-            solved = True
-            break
-        
-        # Check if all opponent moves lead to checkmate (forced mate)
-        # This handles cases where mate happens after opponent's response
-        opponent_has_legal_moves = False
-        all_opponent_moves_lead_to_mate = True
-        
-        for opponent_move in board.legal_moves:
-            opponent_has_legal_moves = True
-            board.push(opponent_move)
-            if not board.is_checkmate():
-                all_opponent_moves_lead_to_mate = False
-            board.pop()
-            
-            if not all_opponent_moves_lead_to_mate:
-                break
-        
-        if opponent_has_legal_moves and all_opponent_moves_lead_to_mate:
-            print(f"\n✓ FORCED MATE after {i+1} of our moves (all opponent responses lead to checkmate)!")
-            solved = True
-            break
-        elif board.is_game_over():
-            # Game ended but not checkmate (stalemate, etc.)
-            print(f"\nGame over (not checkmate) after {i+1} of our moves")
-            break
-            break
-        
-        # Apply opponent's expected response (if available) before our next move
-        if i < len(opponent_responses):
-            opponent_response = chess.Move.from_uci(opponent_responses[i])
-            board.push(opponent_response)
-            print(f"  (Opponent responds: {opponent_responses[i]})")
-    
-    # Final check: did we solve it (reach checkmate within expected moves)?
-    if not solved:
-        # Check the board state one more time
-        if board.is_checkmate():
-            print(f"\n✓ CHECKMATE reached (took {len(our_moves)} of our moves, expected {expected_num_our_moves})")
-            solved = True
-        elif board.is_game_over():
-            print(f"\nGame ended but not checkmate. Final position:")
-            print(board)
-            print(f"FEN: {board.fen()}")
-            print(f"Game over reason: checkmate={board.is_checkmate()}, stalemate={board.is_stalemate()}")
-            solved = False
-        else:
-            print(f"\n✗ No checkmate reached after {len(our_moves)} of our moves. Our moves: {' '.join(our_moves)}")
-            print(f"Current position (turn: {'White' if board.turn == chess.WHITE else 'Black'}):")
-            print(board)
-            print(f"FEN: {board.fen()}")
-            solved = False
-    
-    if solved:
-        print(f"\nTotal - Nodes: {total_nodes:,} | Time: {total_time:.2f}s")
-        print(f"Our solution: {' '.join(our_moves)}")
+        solved = False
     
     # Clean up engine
     if engine:
@@ -850,14 +495,10 @@ if __name__ == "__main__":
         'Themes': ['mate', 'mateIn2', 'middlegame', 'short'],
         'OpeningTags': ['Horwitz_Defense', 'Horwitz_Defense_Other_variations']
     }
-    # Test the minimax solver
+    # Test the forward search puzzle solver
     print("\n" + "="*50)
-    print("TESTING MINIMAX PUZZLE SOLVER")
+    print("TESTING FORWARD SEARCH PUZZLE SOLVER")
     print("="*50)
-    
-    # Try chess.engine evaluation (faster than stockfish package)
-    print("Testing with chess.engine evaluation (python-chess engine interface)")
-    print("This uses Stockfish via chess.engine with very low depth for speed")
     
     # Test 1: Simple puzzle
     print("\n" + "="*50)
@@ -868,10 +509,7 @@ if __name__ == "__main__":
     print(simple_board)
     print()
     
-    # Test with engine evaluation
-    # For mate-in-1, we need at least depth 2 (opponent move + our response)
-    # But we're using depth 5 to be safe
-    result = solve_puzzle(simple_puzzle, depth=4, use_engine_eval=True)
+    result = solve_puzzle(simple_puzzle, max_depth=4, use_engine_eval=False)
     if result:
         print("\n✓ SUCCESS! Simple puzzle solved correctly")
 
@@ -881,33 +519,14 @@ if __name__ == "__main__":
     print("TEST 2: HARDER PUZZLE (Mate in 2)")
     print("="*50)
     print("This mate-in-2 puzzle requires finding a forced checkmate.")
-    print("Testing with chess.engine evaluation...\n")
+    print("Testing with forward search...\n")
     
-    # Test with different depths
-    for depth in [3, 4]:
-        print(f"\n{'='*50}")
-        print(f"Testing with depth={depth}")
-        print('='*50)
-        
-        result = solve_puzzle(example_puzzle, depth=depth, use_engine_eval=True)
-        
-        if result:
-            print(f"\n✓ SUCCESS! Puzzle solved correctly at depth {depth}")
-        else:
-            print(f"\n✗ FAILED at depth {depth}")
-        
-        # Only try deeper if shallow failed
-        if result:
-            break
-        
-        if result:
-            print(f"\n✓ SUCCESS! Puzzle solved correctly at depth {depth}")
-        else:
-            print(f"\n✗ FAILED at depth {depth}")
-        
-        # Only try deeper if shallow failed
-        if result:
-            break
+    result = solve_puzzle(example_puzzle, max_depth=4, use_engine_eval=False)
+    
+    if result:
+        print(f"\n✓ SUCCESS! Puzzle solved correctly")
+    else:
+        print(f"\n✗ FAILED")
     
     # Uncomment to load and filter the full dataset:
     # print("\n" + "="*50)
