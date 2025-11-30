@@ -13,7 +13,8 @@ import random
 import chess
 import chess.engine
 import time
-from main import filter_puzzles_by_mate_in_n, order_moves, parse_puzzle_moves
+from pathlib import Path
+from main import filter_puzzles_by_mate_in_n, order_moves, parse_puzzle_moves, save_board_svg, render_board_svg
 from custom_eval import (
     evaluate_position_fast,
 )
@@ -68,13 +69,26 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
     board, our_expected_moves, opponent_responses = parse_puzzle_moves(puzzle_data)
     expected_num_our_moves = len(our_expected_moves)
     
-    # Get the opponent's first move for display
+    # Create output directory for puzzle renders
+    puzzle_id = puzzle_data.get('PuzzleId', 'unknown')
+    output_dir = Path("puzzle_renders") / f"{puzzle_id}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save initial position (after opponent's first move)
     all_moves = puzzle_data['Moves'].split()
     if len(all_moves) > 0:
         print(f"Opponent plays: {all_moves[0]}")
+        opponent_first_move = chess.Move.from_uci(all_moves[0])
+        check_square = board.king(board.turn) if board.is_check() else None
+        save_board_svg(
+            board, 
+            output_dir / "00_initial.svg",
+            last_move=opponent_first_move,
+            check_square=check_square
+        )
     
     eval_name = "STOCKFISH" if use_engine_eval else "CUSTOM"
-    print(f"Solving puzzle {puzzle_data['PuzzleId']} using forward search with {eval_name} evaluation")
+    print(f"Solving puzzle {puzzle_id} using forward search with {eval_name} evaluation")
     print(f"Full sequence: {' '.join(all_moves)}")
     print(f"Our expected moves: {' '.join(our_expected_moves)} ({expected_num_our_moves} moves to mate)")
     print(f"Opponent responses: {' '.join(opponent_responses) if opponent_responses else 'N/A'}")
@@ -288,6 +302,36 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
             print(f"  ✓ Matches expected solution exactly!")
         else:
             print(f"  → Different from expected, but leads to checkmate")
+        
+        # Visualize the solution sequence in correct order
+        visualize_solution = board.copy()
+        move_number = 1  # Start from 1 (0 is initial position)
+        
+        for i, move in enumerate(solution_moves):
+            # Our move
+            visualize_solution.push(move)
+            check_square = visualize_solution.king(visualize_solution.turn) if visualize_solution.is_check() else None
+            save_board_svg(
+                visualize_solution,
+                output_dir / f"{move_number:02d}_{move.uci()}.svg",
+                last_move=move,
+                check_square=check_square
+            )
+            move_number += 1
+            
+            # Apply opponent response if available
+            if i < len(opponent_responses):
+                opp_move = chess.Move.from_uci(opponent_responses[i])
+                if opp_move in visualize_solution.legal_moves:
+                    visualize_solution.push(opp_move)
+                    check_square = visualize_solution.king(visualize_solution.turn) if visualize_solution.is_check() else None
+                    save_board_svg(
+                        visualize_solution,
+                        output_dir / f"{move_number:02d}_{opp_move.uci()}.svg",
+                        last_move=opp_move,
+                        check_square=check_square
+                    )
+                    move_number += 1
         
         solved = True
     else:
