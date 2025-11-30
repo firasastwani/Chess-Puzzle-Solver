@@ -1,11 +1,8 @@
 """
-Comprehensive test file for puzzle solving with different evaluation methods.
+Stress test file for high-rated chess puzzles (3000+ rating).
 
-Tests:
-1. Custom evaluators with mateIn2 puzzles (5 puzzles)
-2. Stockfish evaluator with mateIn2 puzzles (5 puzzles, same as test 1)
-3. Custom evaluators with random puzzles (5 puzzles)
-4. Stockfish evaluator with random puzzles (5 puzzles, same as test 3)
+This tests the algorithm's limits on extremely difficult puzzles.
+Tests both custom and Stockfish evaluators on the hardest puzzles.
 """
 
 from datasets import load_dataset
@@ -17,13 +14,13 @@ from main import filter_puzzles_by_mate_in_n, order_moves, parse_puzzle_moves
 from custom_eval import (
     evaluate_position_fast,
 )
-import chess.engine
 
 # Global counter for nodes explored
 nodes_explored = 0
 
 
-def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, stockfish_path=None):
+def solve_puzzle_with_eval(puzzle_data, max_depth=15, use_engine_eval=False, stockfish_path=None, 
+                           max_nodes=100000, max_time=30.0):
     """
     Solve puzzle using forward search with evaluation functions.
     
@@ -32,12 +29,15 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
         max_depth: Maximum search depth (number of our moves to search)
         use_engine_eval: If True, use Stockfish engine; False uses custom fast evaluation
         stockfish_path: Path to Stockfish binary (None for auto-detect)
+        max_nodes: Maximum nodes to explore before giving up
+        max_time: Maximum time in seconds before giving up
     
     Returns:
         bool: True if puzzle was solved correctly
     """
     global nodes_explored
     nodes_explored = 0
+    search_start_time = time.time()
     
     # Initialize engine ONLY if using engine evaluation
     engine = None
@@ -117,9 +117,6 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
                 return evaluate_position_fast(board)
         else:
             # CUSTOM EVALUATION: Only uses functions from custom_eval.py
-            # Currently using evaluate_position_fast, but can be changed to:
-            # - evaluate_position() for full custom evaluation
-            # - evaluate_position_fast() for fast material-based evaluation
             return evaluate_position_fast(board)
     
     def forward_search_with_eval(current_board, our_move_index, our_moves_so_far, alpha=float('-inf')):
@@ -137,7 +134,20 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
             tuple: (found_solution: bool, solution_moves: list, best_score: float)
         """
         global nodes_explored
+        
+        # Check timeout and node limits
+        if nodes_explored >= max_nodes:
+            return False, our_moves_so_far, float('-inf')
+        
+        elapsed_time = time.time() - search_start_time
+        if elapsed_time >= max_time:
+            return False, our_moves_so_far, float('-inf')
+        
         nodes_explored += 1
+        
+        # Progress indicator for long searches
+        if nodes_explored % 1000 == 0:
+            print(f"  ... {nodes_explored:,} nodes explored, {elapsed_time:.1f}s elapsed...")
         
         # Base case: check if we've reached checkmate
         if current_board.is_checkmate():
@@ -274,6 +284,10 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
     found, solution_moves, final_score = forward_search_with_eval(board, 0, [])
     elapsed = time.time() - start_time
     
+    # Check if we hit limits
+    hit_node_limit = nodes_explored >= max_nodes
+    hit_time_limit = elapsed >= max_time
+    
     if found and solution_moves is not None:
         print(f"\n✓ SOLUTION FOUND!")
         print(f"  Our moves: {' '.join([m.uci() for m in solution_moves])}")
@@ -294,6 +308,10 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
         print(f"\n✗ NO SOLUTION FOUND")
         print(f"  Nodes explored: {nodes_explored:,}")
         print(f"  Time: {elapsed:.2f}s")
+        if hit_node_limit:
+            print(f"  ⚠ Hit node limit ({max_nodes:,} nodes)")
+        if hit_time_limit:
+            print(f"  ⚠ Hit time limit ({max_time:.1f}s)")
         solved = False
     
     # Clean up engine
@@ -306,19 +324,20 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
     return solved
 
 
-def test_puzzles(puzzles, test_name, use_engine_eval=False, max_depth=10):
+def test_high_rated_puzzles(puzzles, test_name, use_engine_eval=False, max_depth=8, 
+                           max_nodes=50000, max_time=20.0):
     """
-    Test a set of puzzles with the specified evaluation method.
+    Test a set of high-rated puzzles with the specified evaluation method.
     
     Args:
         puzzles: List of puzzle dictionaries
         test_name: Name of the test (for display)
         use_engine_eval: If True, use Stockfish; False uses custom evaluation
-        max_depth: Maximum search depth
+        max_depth: Maximum search depth (increased for high-rated puzzles)
+        max_nodes: Maximum nodes to explore per puzzle
+        max_time: Maximum time per puzzle in seconds
     """
-    print(f"\n{'='*70}")
-    print(f"{test_name}")
-    print(f"{'='*70}\n")
+    # Note: test_name is printed by the calling code, so we don't duplicate it here
     
     results = []
     total_start_time = time.time()
@@ -338,7 +357,9 @@ def test_puzzles(puzzles, test_name, use_engine_eval=False, max_depth=10):
         solved = solve_puzzle_with_eval(
             puzzle, 
             max_depth=max_depth, 
-            use_engine_eval=use_engine_eval
+            use_engine_eval=use_engine_eval,
+            max_nodes=max_nodes,
+            max_time=max_time
         )
         puzzle_time = time.time() - puzzle_start_time
         
@@ -346,7 +367,8 @@ def test_puzzles(puzzles, test_name, use_engine_eval=False, max_depth=10):
             'puzzle_id': puzzle.get('PuzzleId', 'N/A'),
             'solved': solved,
             'time': puzzle_time,
-            'rating': puzzle.get('Rating', 'N/A')
+            'rating': puzzle.get('Rating', 'N/A'),
+            'nodes': nodes_explored
         })
         
         status = "✓ SOLVED" if solved else "✗ FAILED"
@@ -365,11 +387,13 @@ def test_puzzles(puzzles, test_name, use_engine_eval=False, max_depth=10):
     print(f"Success rate: {sum(1 for r in results if r['solved'])/len(results)*100:.1f}%")
     print(f"Total time: {total_time:.2f}s")
     print(f"Average time per puzzle: {total_time/len(results):.2f}s")
+    print(f"Average nodes per puzzle: {sum(r['nodes'] for r in results)/len(results):,.0f}")
     print(f"\nDetailed results:")
     for i, result in enumerate(results, 1):
         status = "✓" if result['solved'] else "✗"
         print(f"  {status} Puzzle {i} (ID: {result['puzzle_id']}, Rating: {result['rating']}): "
-              f"{'SOLVED' if result['solved'] else 'FAILED'} in {result['time']:.2f}s")
+              f"{'SOLVED' if result['solved'] else 'FAILED'} in {result['time']:.2f}s "
+              f"({result['nodes']:,} nodes)")
     print(f"{'='*70}\n")
     
     return results
@@ -380,12 +404,13 @@ if __name__ == "__main__":
     random.seed(42)
     
     print("="*70)
-    print("COMPREHENSIVE PUZZLE SOLVING TESTS")
+    print("HIGH-RATED PUZZLE STRESS TEST (2500+ Rating)")
     print("="*70)
-    print("\nThis test suite compares:")
-    print("  - Custom evaluation (fast material-based)")
-    print("  - Stockfish engine evaluation")
-    print("  - On both mate-in-2 puzzles and random mate puzzles")
+    print("\nThis test suite pushes the algorithm to its limits:")
+    print("  - Only puzzles rated 2500+ (extremely difficult)")
+    print("  - Tests both custom and Stockfish evaluators")
+    print("  - max_depth=8, max_nodes=50,000, max_time=20s per puzzle")
+    print("  - Progress indicators for long searches")
     print("="*70)
     
     # Load dataset
@@ -398,98 +423,91 @@ if __name__ == "__main__":
         print("Dataset loaded (size unknown)")
     
     # ========================================================================
-    # TEST 1 & 2: Mate-in-2 puzzles (same puzzles for both tests)
+    # Filter for high-rated mate puzzles (3000+ rating)
     # ========================================================================
     print("\n" + "="*70)
-    print("PREPARING MATE-IN-2 PUZZLES")
+    print("FILTERING FOR HIGH-RATED MATE PUZZLES (3000+)")
     print("="*70)
     
-    print("\nFiltering for 'mateIn2' puzzles...")
-    mate_in_2 = filter_puzzles_by_mate_in_n(ds['train'], 2)
-    mate_in_2_list = list(mate_in_2)
-    print(f"Found {len(mate_in_2_list)} mate-in-2 puzzles")
+    print("\nSearching for puzzles with rating >= 2500 and 'mate' theme...")
+    print("(This may take a while as we search through the dataset)")
     
-    # Select 5 random mate-in-2 puzzles
-    if len(mate_in_2_list) < 5:
-        mate2_puzzles = mate_in_2_list
-    else:
-        mate2_puzzles = random.sample(mate_in_2_list, 5)
-    
-    print(f"Selected {len(mate2_puzzles)} puzzles for tests 1 & 2\n")
-    
-    # TEST 1: Custom evaluator with mateIn2 puzzles
-    test_puzzles(
-        puzzles=mate2_puzzles,
-        test_name="TEST 1: CUSTOM EVALUATOR - MATE-IN-2 PUZZLES",
-        use_engine_eval=False,
-        max_depth=10
-    )
-    
-    # TEST 2: Stockfish evaluator with mateIn2 puzzles (same puzzles)
-    test_puzzles(
-        puzzles=mate2_puzzles,
-        test_name="TEST 2: STOCKFISH EVALUATOR - MATE-IN-2 PUZZLES",
-        use_engine_eval=True,
-        max_depth=10
-    )
-    
-    # ========================================================================
-    # TEST 3 & 4: Random mate puzzles (same puzzles for both tests)
-    # ========================================================================
-    print("\n" + "="*70)
-    print("PREPARING RANDOM MATE PUZZLES")
-    print("="*70)
-    
-    print("\nSelecting random mate puzzles from dataset...")
-    print("(Filtering for puzzles with 'mate' theme, sampling without converting entire dataset)")
-    
-    # Efficiently sample random MATE puzzles without converting entire dataset
-    random_puzzles = []
-    max_to_check = 5000  # Check up to 5000 puzzles to find 5 mate puzzles
-    
-    # Iterate and collect mate puzzles
-    collected = []
+    high_rated_puzzles = []
     checked = 0
+    max_to_check = 50000  # Check up to 50k puzzles to find high-rated ones
+    
+    # Iterate and collect high-rated mate puzzles
     for puzzle in ds['train']:
         checked += 1
         if checked > max_to_check:
             break
         
-        # Check if this puzzle has 'mate' in themes
+        # Check if this puzzle meets criteria
+        rating = puzzle.get('Rating', 0) if isinstance(puzzle, dict) else 0
         themes = puzzle.get('Themes', []) if isinstance(puzzle, dict) else []
-        if 'mate' in themes:
-            collected.append(puzzle)
-            if len(collected) >= 5 * 2:  # Collect extra for random sampling
+        
+        if rating >= 2500 and 'mate' in themes:
+            high_rated_puzzles.append(puzzle)
+            if len(high_rated_puzzles) >= 5:  # Collect 5 high-rated puzzles
                 break
         
-        if checked % 500 == 0 and checked > 0:
-            print(f"  Checked {checked:,} puzzles, found {len(collected)} mate puzzles...")
+        if checked % 10000 == 0 and checked > 0:
+            print(f"  Checked {checked:,} puzzles, found {len(high_rated_puzzles)} high-rated mate puzzles...")
     
-    if len(collected) >= 5:
-        random_puzzles = random.sample(collected, 5)
-    else:
-        random_puzzles = collected
-        print(f"  Warning: Only found {len(collected)} mate puzzles, using all of them")
+    if len(high_rated_puzzles) < 5:
+        print(f"  Warning: Only found {len(high_rated_puzzles)} puzzles with rating >= 2500")
+        if len(high_rated_puzzles) == 0:
+            print("  No high-rated puzzles found. Try lowering the rating threshold or checking more puzzles.")
+            exit(1)
     
-    print(f"Selected {len(random_puzzles)} random mate puzzles for tests 3 & 4\n")
+    print(f"\nFound {len(high_rated_puzzles)} high-rated mate puzzles (rating >= 2500)")
+    print(f"Ratings: {[p.get('Rating', 'N/A') for p in high_rated_puzzles]}")
     
-    # TEST 3: Custom evaluator with random mate puzzles
-    test_puzzles(
-        puzzles=random_puzzles,
-        test_name="TEST 3: CUSTOM EVALUATOR - RANDOM MATE PUZZLES",
+    # ========================================================================
+    # TEST 1: Custom evaluator on high-rated puzzles
+    # ========================================================================
+    print("\n" + "="*70)
+    print("TEST 1: CUSTOM EVALUATOR - HIGH-RATED PUZZLES (2500+)")
+    print("="*70)
+    print("\nTesting custom evaluation functions (no engine assistance)")
+    print("on extremely difficult puzzles to push the algorithm's limits.")
+    print(f"Limits: max_depth={8}, max_nodes=50,000, max_time=20s per puzzle\n")
+    
+    test_high_rated_puzzles(
+        puzzles=high_rated_puzzles,
+        test_name="TEST 1: CUSTOM EVALUATOR - HIGH-RATED PUZZLES (2500+)",
         use_engine_eval=False,
-        max_depth=10
+        max_depth=8,
+        max_nodes=50000,  # Limit nodes to prevent infinite search
+        max_time=20.0     # Limit time to 20 seconds per puzzle
     )
     
-    # TEST 4: Stockfish evaluator with random mate puzzles (same puzzles)
-    test_puzzles(
-        puzzles=random_puzzles,
-        test_name="TEST 4: STOCKFISH EVALUATOR - RANDOM MATE PUZZLES",
+    # ========================================================================
+    # TEST 2: Stockfish evaluator on high-rated puzzles (same puzzles)
+    # ========================================================================
+    print("\n" + "="*70)
+    print("TEST 2: STOCKFISH EVALUATOR - HIGH-RATED PUZZLES (2500+)")
+    print("="*70)
+    print("\nTesting Stockfish engine evaluation on the same puzzles")
+    print("for comparison with custom evaluation.")
+    print(f"Limits: max_depth={8}, max_nodes=50,000, max_time=20s per puzzle\n")
+    
+    test_high_rated_puzzles(
+        puzzles=high_rated_puzzles,
+        test_name="TEST 2: STOCKFISH EVALUATOR - HIGH-RATED PUZZLES (2500+)",
         use_engine_eval=True,
-        max_depth=10
+        max_depth=8,
+        max_nodes=50000,  # Limit nodes to prevent infinite search
+        max_time=20.0     # Limit time to 20 seconds per puzzle
     )
     
     print("\n" + "="*70)
     print("ALL TESTS COMPLETE")
+    print("="*70)
+    print("\nThis stress test shows how the algorithm performs on extremely")
+    print("difficult puzzles. High-rated puzzles often require:")
+    print("  - Deep search (many moves ahead)")
+    print("  - Complex tactical sequences")
+    print("  - Precise move ordering")
     print("="*70)
 

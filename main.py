@@ -447,13 +447,13 @@ def solve_puzzle(puzzle_data, stockfish_path=None, max_depth=10, use_engine_eval
         # Verify solution matches expected
         solution_ucis = [m.uci() for m in solution_moves]
         if solution_ucis == our_expected_moves:
-            print(f"  ✓ Matches expected solution exactly!")
+            print(f"  Matches expected solution exactly!")
         else:
-            print(f"  → Different from expected, but leads to checkmate")
+            print(f"  Different from expected, but leads to checkmate")
         
         solved = True
     else:
-        print(f"\n✗ NO SOLUTION FOUND")
+        print(f"\n NO SOLUTION FOUND")
         print(f"  Nodes explored: {nodes_explored:,}")
         print(f"  Time: {elapsed:.2f}s")
         solved = False
