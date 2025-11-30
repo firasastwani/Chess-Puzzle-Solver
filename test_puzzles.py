@@ -16,8 +16,8 @@ import time
 from main import filter_puzzles_by_mate_in_n, order_moves, parse_puzzle_moves
 from custom_eval import (
     evaluate_position_fast,
-    evaluate_position_engine,
 )
+import chess.engine
 
 # Global counter for nodes explored
 nodes_explored = 0
@@ -39,7 +39,7 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
     global nodes_explored
     nodes_explored = 0
     
-    # Initialize engine if needed
+    # Initialize engine ONLY if using engine evaluation
     engine = None
     if use_engine_eval:
         try:
@@ -60,6 +60,9 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
             print("Falling back to custom evaluation...")
             use_engine_eval = False
             engine = None
+    else:
+        # For custom evaluation, ensure no engine is initialized
+        engine = None
     
     # Parse puzzle moves using the standard function
     board, our_expected_moves, opponent_responses = parse_puzzle_moves(puzzle_data)
@@ -77,10 +80,46 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
     print(f"Opponent responses: {' '.join(opponent_responses) if opponent_responses else 'N/A'}")
     
     def evaluate_position_custom(board):
-        """Wrapper to select the right evaluation function."""
+        """
+        Evaluation function wrapper.
+        - If use_engine_eval=True: Uses Stockfish engine (external)
+        - If use_engine_eval=False: Uses ONLY functions from custom_eval.py
+        """
         if use_engine_eval and engine:
-            return evaluate_position_engine(board, engine, depth_limit=2, time_limit=0.02)
+            # Use Stockfish engine for evaluation (external, not from custom_eval.py)
+            try:
+                info = engine.analyse(
+                    board,
+                    chess.engine.Limit(depth=2, time=0.02)
+                )
+                # Get score safely
+                score_obj = info.get("score")
+                if score_obj is None:
+                    return evaluate_position_fast(board)
+                
+                score = score_obj.relative.score(mate_score=100000)
+                
+                # Handle None (mate) or convert to int
+                if score is None:
+                    if score_obj.relative.is_mate():
+                        mate_in = score_obj.relative.mate()
+                        score = (50000 - abs(mate_in) * 100) if mate_in else 50000
+                    else:
+                        score = 0
+                
+                score_int = int(score)
+                if board.turn == chess.BLACK:
+                    score_int = -score_int
+                
+                return score_int
+            except Exception:
+                # Fallback to custom evaluation if engine fails
+                return evaluate_position_fast(board)
         else:
+            # CUSTOM EVALUATION: Only uses functions from custom_eval.py
+            # Currently using evaluate_position_fast, but can be changed to:
+            # - evaluate_position() for full custom evaluation
+            # - evaluate_position_fast() for fast material-based evaluation
             return evaluate_position_fast(board)
     
     def forward_search_with_eval(current_board, our_move_index, our_moves_so_far, alpha=float('-inf')):
@@ -135,7 +174,9 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
         
         best_score = float('-inf')
         best_solution = None
+        found_checkmate = False
         
+        # Explore ALL moves to find the optimal one based on evaluation
         for move in ordered_moves:
             # Make our move
             current_board.push(move)
@@ -143,8 +184,16 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
             
             # Check if this move immediately gives checkmate
             if current_board.is_checkmate():
+                # Found checkmate, but continue exploring to see if there's a better one
+                # (though checkmate is always best, we still want to count all nodes)
+                found_checkmate = True
+                score = 100000
+                if score > best_score:
+                    best_score = score
+                    best_solution = new_moves
                 current_board.pop()
-                return True, new_moves, 100000
+                # Continue exploring other moves to count all nodes
+                continue
             
             # Apply opponent's known response (if available)
             if our_move_index < len(opponent_responses):
@@ -163,9 +212,14 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
                     current_board.pop()
                     
                     if found:
-                        # Undo our move before returning
+                        # Found checkmate sequence, but continue exploring to find optimal
+                        found_checkmate = True
+                        if score > best_score:
+                            best_score = score
+                            best_solution = solution
+                        # Continue exploring other moves
                         current_board.pop()
-                        return True, solution, score
+                        continue
                     
                     # Update best score and alpha
                     if score > best_score:
@@ -194,21 +248,29 @@ def solve_puzzle_with_eval(puzzle_data, max_depth=10, use_engine_eval=False, sto
                         break
                 
                 if all_lead_to_mate and current_board.legal_moves:
+                    found_checkmate = True
+                    score = 100000
+                    if score > best_score:
+                        best_score = score
+                        best_solution = new_moves
                     current_board.pop()
-                    return True, new_moves, 100000
+                    continue
             
             # Undo our move
             current_board.pop()
         
-        # No solution found from this position
-        return False, best_solution if best_solution else our_moves_so_far, best_score
+        # Return the best solution found (checkmate if found, otherwise best evaluation)
+        if found_checkmate and best_solution is not None:
+            return True, best_solution, best_score
+        else:
+            return False, best_solution if best_solution else our_moves_so_far, best_score
     
     # Start the forward search
     start_time = time.time()
     found, solution_moves, final_score = forward_search_with_eval(board, 0, [])
     elapsed = time.time() - start_time
     
-    if found:
+    if found and solution_moves is not None:
         print(f"\n✓ SOLUTION FOUND!")
         print(f"  Our moves: {' '.join([m.uci() for m in solution_moves])}")
         print(f"  Expected: {' '.join(our_expected_moves)}")

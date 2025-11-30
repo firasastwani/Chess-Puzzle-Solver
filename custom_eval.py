@@ -1,8 +1,8 @@
 import chess
-import chess.engine
 
 """
-Custom evaluation functions for the minimax algorithm
+Custom evaluation functions - pure implementations without external engines.
+All evaluation is done using custom heuristics and chess logic.
 """
 
 # ==================== EVALUATION FUNCTIONS ====================
@@ -128,58 +128,6 @@ def evaluate_position_fast(board):
         score -= 200 if board.turn == chess.WHITE else 200
     
     return score if board.turn == chess.WHITE else -score
-
-
-def evaluate_position_engine(board, engine, depth_limit=4, time_limit=0.1):
-    """
-    Use chess.engine (python-chess) to evaluate positions.
-    This is more direct than the stockfish package and can be faster.
-    
-    Args:
-        board: chess.Board position
-        engine: chess.engine.SimpleEngine instance
-        depth_limit: Maximum search depth (4 = sufficient for tactical sequences)
-        time_limit: Maximum time in seconds (0.1 = 100ms)
-    
-    Returns:
-        int: Position evaluation in centipawns (positive = white advantage)
-    """
-    if board.is_checkmate():
-        return -100000
-    
-    if board.is_stalemate() or board.is_insufficient_material():
-        return 0
-    
-    try:
-        # Use chess.engine to analyze position with very low depth/time
-        info = engine.analyse(
-            board,
-            chess.engine.Limit(depth=depth_limit, time=time_limit)
-        )
-        
-        # Get score from the perspective of the side to move
-        score = info["score"].relative.score(mate_score=100000)
-        
-        # Handle None (mate) or convert to int
-        if score is None:
-            # Check if it's a mate
-            if info["score"].relative.is_mate():
-                mate_in = info["score"].relative.mate()
-                score = 50000 - abs(mate_in) * 100 if mate_in else 50000
-            else:
-                score = 0
-        
-        # Convert to int and ensure score is always from White's perspective
-        # info["score"].relative is from the perspective of the side to move
-        score_int = int(score)
-        if board.turn == chess.BLACK:
-            # If it's Black's turn, flip the score to White's perspective
-            score_int = -score_int
-        
-        return score_int
-    except Exception as e:
-        # Fallback to fast material eval if engine fails
-        return evaluate_position_fast(board)
 
 
 def evaluate_king_attacks(board):

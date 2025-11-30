@@ -8,7 +8,6 @@ import time
 import sys
 from custom_eval import (
     evaluate_position_fast,
-    evaluate_position_engine,
     evaluate_king_attacks,
     evaluate_piece_positions,
     evaluate_king_saftey
