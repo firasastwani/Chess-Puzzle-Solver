@@ -2,10 +2,7 @@ python-chess
 stockfish (analysis)
 datasets (huggingface datasets)
 
-matplotlib
 graphviz 
 chess[svg] (board rendering) 
 
-pandas (data analysis) 
-seaborn (pretty plots)
 tqdm (progress bar) 
