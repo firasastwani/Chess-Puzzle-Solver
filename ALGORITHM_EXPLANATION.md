@@ -8,7 +8,7 @@ The algorithm uses **forward search** with **known opponent responses** to find 
 
 ## Component Breakdown
 
-### 1. `load_puzzle_board(fen_string)` (Lines 16-25)
+### 1. `load_puzzle_board(fen_string)`
 
 **Purpose**: Initialize the chess board from the puzzle's starting position.
 
@@ -23,7 +23,7 @@ The algorithm uses **forward search** with **known opponent responses** to find 
 
 ---
 
-### 2. `parse_puzzle_moves(puzzle_data)` (Lines 256-293)
+### 2. `parse_puzzle_moves(puzzle_data)` 
 
 **Purpose**: Parse the puzzle's move sequence and separate our moves from opponent responses.
 
@@ -46,7 +46,7 @@ The algorithm uses **forward search** with **known opponent responses** to find 
 
 ---
 
-### 3. `order_moves(board, moves, previous_move=None)` (Lines 159-249)
+### 3. `order_moves(board, moves, previous_move=None)` 
 
 **Purpose**: Prioritize moves to try the most promising ones first, dramatically reducing search time.
 
@@ -92,7 +92,7 @@ After ordering: [e2e6, f1f2, b1c3, a1a2, ...]
 
 ---
 
-### 4. `forward_search(current_board, our_move_index, our_moves_so_far)` (Lines 350-432)
+### 4. `forward_search(current_board, our_move_index, our_moves_so_far)` 
 
 **Purpose**: The core recursive search algorithm that finds the checkmate sequence.
 
@@ -100,7 +100,7 @@ After ordering: [e2e6, f1f2, b1c3, a1a2, ...]
 
 #### Base Cases (Termination Conditions):
 
-1. **Checkmate found** (Line 366):
+1. **Checkmate found** 
    ```python
    if current_board.is_checkmate():
        return True, our_moves_so_far
@@ -108,7 +108,7 @@ After ordering: [e2e6, f1f2, b1c3, a1a2, ...]
    - If we've reached checkmate, we're done!
    - Returns the sequence of moves that led to checkmate
 
-2. **All expected moves made** (Line 370):
+2. **All expected moves made**
    ```python
    if our_move_index >= expected_num_our_moves:
        return current_board.is_checkmate(), our_moves_so_far
@@ -116,7 +116,7 @@ After ordering: [e2e6, f1f2, b1c3, a1a2, ...]
    - If we've made all our moves, check if we're in checkmate
    - Prevents searching beyond the puzzle's expected length
 
-3. **Max depth exceeded** (Line 374):
+3. **Max depth exceeded** 
    ```python
    if our_move_index >= max_depth:
        return False, our_moves_so_far
@@ -126,24 +126,24 @@ After ordering: [e2e6, f1f2, b1c3, a1a2, ...]
 
 #### Recursive Search Process:
 
-1. **Get ordered moves** (Line 378):
+1. **Get ordered moves**
    ```python
    ordered_moves = order_moves(current_board, current_board.legal_moves, previous_move)
    ```
    - Gets all legal moves and orders them by priority
    - Tries best moves first
 
-2. **Try each move** (Line 381):
+2. **Try each move** 
    ```python
    for move in ordered_moves:
        current_board.push(move)  # Make our move
    ```
 
-3. **Check for immediate checkmate** (Line 387):
+3. **Check for immediate checkmate** 
    - If this move gives checkmate, return immediately
    - No need to search further
 
-4. **Apply known opponent response** (Lines 391-407):
+4. **Apply known opponent response**
    ```python
    if our_move_index < len(opponent_responses):
        opponent_response = chess.Move.from_uci(opponent_responses[our_move_index])
@@ -155,11 +155,11 @@ After ordering: [e2e6, f1f2, b1c3, a1a2, ...]
    - Not adversarial - doesn't assume opponent minimizes our score
    - Recursively searches for the next move
 
-5. **Handle forced mate** (Lines 412-426):
+5. **Handle forced mate** 
    - If no more opponent responses expected, check if all opponent moves lead to checkmate
    - This handles mate-in-1 cases
 
-6. **Backtrack** (Line 429):
+6. **Backtrack**
    ```python
    current_board.pop()  # Undo our move
    ```
@@ -185,23 +185,23 @@ Start position (after opponent's e8f7)
 
 ---
 
-### 5. `solve_puzzle(puzzle_data, ...)` (Lines 296-468)
+### 5. `solve_puzzle(puzzle_data, ...)`
 
 **Purpose**: Main entry point that orchestrates the entire solving process.
 
 **How it works** - Step by step:
 
-1. **Initialize** (Lines 313-334):
+1. **Initialize** 
    - Reset node counter
    - Optionally initialize Stockfish engine (if using engine evaluation)
 
-2. **Parse puzzle** (Line 337):
+2. **Parse puzzle** 
    ```python
    board, our_expected_moves, opponent_responses = parse_puzzle_moves(puzzle_data)
    ```
    - Gets the starting position and separates our moves from opponent responses
 
-3. **Start search** (Line 436):
+3. **Start search** 
    ```python
    found, solution_moves = forward_search(board, 0, [])
    ```
@@ -209,7 +209,7 @@ Start position (after opponent's e8f7)
    - `our_move_index=0`: Looking for our first move
    - `our_moves_so_far=[]`: No moves played yet
 
-4. **Report results** (Lines 439-459):
+4. **Report results** 
    - Prints solution if found
    - Shows nodes explored, time taken
    - Verifies solution matches expected
